@@ -1,0 +1,98 @@
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+    networks:
+      - qualcanal-network
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DJANGO_ALLOWED_HOSTS: backend,localhost,127.0.0.1,qualcanal.pt,www.qualcanal.pt,167.172.99.206
+      DJANGO_DEBUG: "false"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
+      MATCH_CACHE_SECONDS: "300"
+      API_ALLOW_ORIGIN: "https://qualcanal.pt,http://qualcanal.pt"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "https://qualcanal.pt,http://qualcanal.pt,https://www.qualcanal.pt,http://www.qualcanal.pt"
+      DJANGO_SESSION_COOKIE_SECURE: "true"
+      DJANGO_HSTS_SECONDS: "31536000"
+      DJANGO_HSTS_INCLUDE_SUBDOMAINS: "true"
+      DJANGO_HSTS_PRELOAD: "true"
+      DATABASE_URL: ${DATABASE_URL:-}
+    expose:
+      - "8000"
+    volumes:
+      - ./logs/django:/app/logs
+      - static_files:/app/static
+    restart: unless-stopped
+    networks:
+      - qualcanal-network
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: https://qualcanal.pt/api
+      NODE_ENV: production
+    expose:
+      - "3000"
+    restart: unless-stopped
+    networks:
+      - qualcanal-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Optional: PostgreSQL database (uncomment if needed)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   environment:
+  #     POSTGRES_DB: qualcanal
+  #     POSTGRES_USER: ${POSTGRES_USER}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+  #   networks:
+  #     - qualcanal-network
+
+  # Optional: Redis cache (uncomment if needed)
+  # redis:
+  #   image: redis:7-alpine
+  #   volumes:
+  #     - redis_data:/data
+  #   restart: unless-stopped
+  #   networks:
+  #     - qualcanal-network
+  #   command: redis-server --appendonly yes
+
+networks:
+  qualcanal-network:
+    driver: bridge
+
+volumes:
+  static_files:
+  # postgres_data:
+  # redis_data:

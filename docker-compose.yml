@@ -1,14 +1,28 @@
 services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
     environment:
-      DJANGO_ALLOWED_HOSTS: backend,localhost,127.0.0.1
+      DJANGO_ALLOWED_HOSTS: backend,localhost,127.0.0.1,qualcanal.pt,www.qualcanal.pt
       DJANGO_DEBUG: "true"
       DJANGO_SECRET_KEY: change-me
       MATCH_CACHE_SECONDS: "60"
-    ports:
-      - "8000:8000"
+      API_ALLOW_ORIGIN: "http://qualcanal.pt,https://qualcanal.pt"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "http://qualcanal.pt,https://qualcanal.pt,http://www.qualcanal.pt,https://www.qualcanal.pt"
+    expose:
+      - "8000"
     # healthcheck:
     #   test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/')\""]
     #   interval: 30s
@@ -25,10 +39,10 @@ services:
       dockerfile: Dockerfile
       target: dev
     environment:
-      NEXT_PUBLIC_API_BASE_URL: http://backend:8000
+      NEXT_PUBLIC_API_BASE_URL: http://qualcanal.pt/api
       NODE_ENV: development
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     volumes:
       - .:/app
       - frontend_node_modules:/app/node_modules
