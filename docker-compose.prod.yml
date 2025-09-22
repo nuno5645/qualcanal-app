@@ -21,7 +21,7 @@ services:
     env_file:
       - ./.env.prod
     environment:
-      DJANGO_ALLOWED_HOSTS: backend,localhost,127.0.0.1,qualcanal.pt,167.172.99.206
+      DJANGO_ALLOWED_HOSTS: backend,localhost,127.0.0.1,qualcanal.pt,www.qualcanal.pt,167.172.99.206
       DJANGO_DEBUG: "false"
       MATCH_CACHE_SECONDS: "300"
       API_ALLOW_ORIGIN: "https://qualcanal.pt,http://qualcanal.pt"
