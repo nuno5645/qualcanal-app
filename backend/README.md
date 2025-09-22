@@ -6,7 +6,6 @@ match schedule as a JSON API that can be consumed by the Next.js frontend.
 ## Getting started
 
 ```bash
-python -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
 python backend/manage.py migrate

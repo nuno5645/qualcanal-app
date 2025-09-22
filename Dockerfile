@@ -3,17 +3,33 @@
 FROM node:20-alpine AS base
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
+RUN corepack enable
 
+# Dependencies stage - better caching
 FROM base AS deps
-COPY package.json pnpm-lock.yaml ./
-RUN corepack enable && pnpm install --frozen-lockfile
+COPY package.json yarn.lock ./
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn \
+    yarn install --frozen-lockfile --prefer-offline
 
+# Development stage - for fast development
+FROM base AS dev
+COPY package.json yarn.lock ./
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn \
+    yarn install --prefer-offline
+COPY . .
+EXPOSE 3000
+CMD ["yarn", "dev"]
+
+# Builder stage - only for production builds
 FROM base AS builder
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY --from=deps /app/node_modules ./node_modules
+COPY package.json yarn.lock ./
+RUN --mount=type=cache,target=/usr/local/share/.cache/yarn \
+    yarn install --frozen-lockfile --prefer-offline
 COPY . .
-RUN corepack enable && pnpm run build
+RUN yarn run build
 
+# Production runner
 FROM base AS runner
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
