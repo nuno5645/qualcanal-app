@@ -100,10 +100,12 @@ if [[ "$1" == "--ssl" ]]; then
         --standalone \
         --preferred-challenges http \
         --http-01-port 80 \
+        --cert-name $DOMAIN \
         -d $DOMAIN -d www.$DOMAIN \
         --agree-tos \
         --no-eff-email \
         --register-unsafely-without-email \
+        --expand \
         --non-interactive
     CERTBOT_EXIT_CODE=$?
     set -e
