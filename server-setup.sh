@@ -61,43 +61,6 @@ apt-get install -y \
     gnupg \
     lsb-release
 
-# Install Docker Engine using the official repository (handles Ubuntu 24.04/Noble)
-if ! command -v docker >/dev/null 2>&1; then
-    log "🐳 Installing Docker Engine from official repo..."
-
-    # Remove potential conflicting packages first
-    apt-get remove -y docker.io containerd runc || true
-    apt-get autoremove -y || true
-
-    install -m 0755 -d /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    chmod a+r /etc/apt/keyrings/docker.gpg
-
-    UBUNTU_CODENAME=$(lsb_release -cs)
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $UBUNTU_CODENAME stable" > /etc/apt/sources.list.d/docker.list
-
-    apt-get update
-
-    # Try installing Docker packages
-    if ! apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin; then
-        warning "Docker install encountered conflicts. Attempting conflict resolution..."
-        apt-get remove -y containerd docker.io runc || true
-        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-    fi
-else
-    success "Docker already installed. Skipping Docker installation."
-fi
-
-# Start and enable Docker
-log "🐳 Ensuring Docker is running..."
-systemctl enable docker || true
-systemctl start docker || true
-
-# Add current user to docker group if not root
-if [[ $SUDO_USER ]]; then
-    usermod -aG docker $SUDO_USER
-    log "Added $SUDO_USER to docker group"
-fi
 
 # Setup firewall
 log "🔥 Configuring firewall..."
