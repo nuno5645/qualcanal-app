@@ -211,8 +211,10 @@ alias qc-update='cd /opt/qualcanal-app && git pull && docker compose -f docker-c
 alias qc-shell='cd /opt/qualcanal-app'
 EOF
 
-if [[ $SUDO_USER ]]; then
-    cat >> /home/$SUDO_USER/.bashrc << 'EOF'
+if [[ -n "$SUDO_USER" && "$SUDO_USER" != "root" ]]; then
+    USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+    if [[ -d "$USER_HOME" ]]; then
+        cat >> "$USER_HOME/.bashrc" << 'EOF'
 
 # QualCanal aliases
 alias qc-status='sudo qualcanal-status'
@@ -221,6 +223,11 @@ alias qc-restart='cd /opt/qualcanal-app && sudo docker compose -f docker-compose
 alias qc-update='cd /opt/qualcanal-app && git pull && sudo docker compose -f docker-compose.prod.yml up -d --build'
 alias qc-shell='cd /opt/qualcanal-app'
 EOF
+    else
+        warning "Home directory for $SUDO_USER not found; skipping user aliases"
+    fi
+else
+    log "No non-root sudo user detected; skipping user aliases"
 fi
 
 success "Helpful aliases created"

@@ -87,40 +87,50 @@ docker compose -f docker-compose.prod.yml build --no-cache
 # Check if SSL setup is requested
 if [[ "$1" == "--ssl" ]]; then
     log "🔒 Setting up SSL certificates..."
-    
-    # Create temporary nginx config for challenge
-    log "Creating temporary nginx for ACME challenge..."
-    docker run -d --name nginx-temp -p 80:80 -v $(pwd)/ssl:/var/www/certbot nginx:alpine
-    
-    # Get SSL certificate
-    log "Requesting SSL certificate from Let's Encrypt..."
+
+    # Ensure no leftover temp container and stop host nginx if present
+    docker rm -f nginx-temp 2>/dev/null || true
+    systemctl stop nginx 2>/dev/null || true
+    systemctl disable nginx 2>/dev/null || true
+
+    # Obtain certificate using standalone authenticator (binds to :80 temporarily)
+    log "Requesting SSL certificate from Let's Encrypt (standalone)..."
+    set +e
     certbot certonly \
-        --webroot \
-        --webroot-path $(pwd)/ssl \
+        --standalone \
+        --preferred-challenges http \
+        --http-01-port 80 \
         -d $DOMAIN \
-        -d www.$DOMAIN \
         --agree-tos \
         --no-eff-email \
         --register-unsafely-without-email \
         --non-interactive
-    
-    # Stop temporary nginx
-    docker stop nginx-temp && docker rm nginx-temp
-    
-    # Copy certificates
-    log "Installing SSL certificates..."
-    cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem ssl/$DOMAIN.crt
-    cp /etc/letsencrypt/live/$DOMAIN/privkey.pem ssl/$DOMAIN.key
-    
-    # Set proper permissions
-    chmod 644 ssl/$DOMAIN.crt
-    chmod 600 ssl/$DOMAIN.key
-    
-    # Setup auto-renewal cron job
-    log "Setting up SSL auto-renewal..."
-    (crontab -l 2>/dev/null | grep -v certbot; echo "0 12 * * * /usr/bin/certbot renew --quiet --deploy-hook 'cd $APP_DIR && docker compose -f docker-compose.prod.yml restart nginx'") | crontab -
-    
-    success "SSL certificates installed and auto-renewal configured!"
+    CERTBOT_EXIT_CODE=$?
+    set -e
+
+    if [[ $CERTBOT_EXIT_CODE -ne 0 ]]; then
+        warning "Let's Encrypt issuance failed (exit $CERTBOT_EXIT_CODE). Falling back to self-signed cert."
+        mkdir -p ssl
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout ssl/$DOMAIN.key \
+            -out ssl/$DOMAIN.crt \
+            -subj "/C=PT/ST=Portugal/L=Lisbon/O=QualCanal/CN=$DOMAIN"
+        chmod 644 ssl/$DOMAIN.crt
+        chmod 600 ssl/$DOMAIN.key
+    else
+        # Copy certificates for nginx container consumption
+        log "Installing SSL certificates..."
+        mkdir -p ssl
+        cp /etc/letsencrypt/live/$DOMAIN/fullchain.pem ssl/$DOMAIN.crt
+        cp /etc/letsencrypt/live/$DOMAIN/privkey.pem ssl/$DOMAIN.key
+        chmod 644 ssl/$DOMAIN.crt
+        chmod 600 ssl/$DOMAIN.key
+
+        # Setup auto-renewal cron job with deploy hook to restart nginx
+        log "Setting up SSL auto-renewal..."
+        (crontab -l 2>/dev/null | grep -v certbot; echo "0 12 * * * /usr/bin/certbot renew --quiet --deploy-hook 'cd $APP_DIR && docker compose -f docker-compose.prod.yml restart nginx'") | crontab -
+        success "SSL certificates installed and auto-renewal configured!"
+    fi
     
 elif [[ ! -f "ssl/$DOMAIN.crt" ]]; then
     warning "No SSL certificates found. Creating self-signed certificates for testing..."
