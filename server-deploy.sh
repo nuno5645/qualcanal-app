@@ -74,7 +74,7 @@ chmod 600 .env.prod
 
 # Stop any running containers
 log "🛑 Stopping existing containers..."
-docker compose -f docker-compose.prod.yml down 2>/dev/null || true
+docker compose --env-file .env.prod -f docker-compose.prod.yml down 2>/dev/null || true
 
 # Clean up old images and containers
 log "🧹 Cleaning up old Docker resources..."
@@ -82,7 +82,7 @@ docker system prune -f
 
 # Build the application
 log "🔨 Building application..."
-docker compose -f docker-compose.prod.yml build --no-cache
+docker compose --env-file .env.prod -f docker-compose.prod.yml build --no-cache
 
 # Check if SSL setup is requested
 if [[ "$1" == "--ssl" ]]; then
@@ -128,7 +128,7 @@ if [[ "$1" == "--ssl" ]]; then
 
         # Setup auto-renewal cron job with deploy hook to restart nginx
         log "Setting up SSL auto-renewal..."
-        (crontab -l 2>/dev/null | grep -v certbot; echo "0 12 * * * /usr/bin/certbot renew --quiet --deploy-hook 'cd $APP_DIR && docker compose -f docker-compose.prod.yml restart nginx'") | crontab -
+        (crontab -l 2>/dev/null | grep -v certbot; echo "0 12 * * * /usr/bin/certbot renew --quiet --deploy-hook 'cd $APP_DIR && docker compose --env-file .env.prod -f docker-compose.prod.yml restart nginx'") | crontab -
         success "SSL certificates installed and auto-renewal configured!"
     fi
     
@@ -149,7 +149,7 @@ fi
 
 # Start the application
 log "🚀 Starting application..."
-docker compose -f docker-compose.prod.yml up -d
+docker compose --env-file .env.prod -f docker-compose.prod.yml up -d
 
 # Wait for services to be ready
 log "⏳ Waiting for services to start..."
@@ -161,7 +161,7 @@ max_attempts=12
 attempt=0
 
 while [[ $attempt -lt $max_attempts ]]; do
-    if docker compose -f docker-compose.prod.yml ps | grep -q "Up"; then
+    if docker compose --env-file .env.prod -f docker-compose.prod.yml ps | grep -q "Up"; then
         success "Services are running!"
         break
     fi
@@ -173,7 +173,7 @@ done
 
 if [[ $attempt -eq $max_attempts ]]; then
     error "Services failed to start properly. Check logs:"
-    docker compose -f docker-compose.prod.yml logs
+    docker compose --env-file .env.prod -f docker-compose.prod.yml logs
     exit 1
 fi
 
@@ -187,7 +187,7 @@ fi
 
 # Display status
 log "📊 Application status:"
-docker compose -f docker-compose.prod.yml ps
+docker compose --env-file .env.prod -f docker-compose.prod.yml ps
 
 # Create backup script
 log "💾 Creating backup script..."
@@ -200,7 +200,7 @@ mkdir -p $BACKUP_DIR
 
 # Backup database
 cd /opt/qualcanal-app
-docker compose -f docker-compose.prod.yml exec -T backend python manage.py dumpdata > $BACKUP_DIR/db_backup_$DATE.json
+docker compose --env-file .env.prod -f docker-compose.prod.yml exec -T backend python manage.py dumpdata > $BACKUP_DIR/db_backup_$DATE.json
 
 # Backup environment and configs
 cp .env.prod $BACKUP_DIR/env_backup_$DATE
@@ -224,7 +224,7 @@ echo
 echo "🎉 Deployment completed successfully!"
 echo
 echo "📊 Current Status:"
-docker compose -f docker-compose.prod.yml ps
+docker compose --env-file .env.prod -f docker-compose.prod.yml ps
 echo
 echo "🌐 Your application is available at:"
 echo "   http://$SERVER_IP"
@@ -254,8 +254,8 @@ if [[ "$1" != "--ssl" && ! -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]]; 
 fi
 echo
 echo "🆘 Troubleshooting:"
-echo "   View logs: docker compose -f docker-compose.prod.yml logs -f"
-echo "   Restart:   docker compose -f docker-compose.prod.yml restart"
-echo "   Rebuild:   docker compose -f docker-compose.prod.yml up -d --build"
+echo "   View logs: docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f"
+echo "   Restart:   docker compose --env-file .env.prod -f docker-compose.prod.yml restart"
+echo "   Rebuild:   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build"
 
 success "QualCanal is now running in production mode!"

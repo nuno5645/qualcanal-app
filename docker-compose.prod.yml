@@ -18,10 +18,11 @@ services:
   backend:
     build:
       context: ./backend
+    env_file:
+      - ./.env.prod
     environment:
       DJANGO_ALLOWED_HOSTS: backend,localhost,127.0.0.1,qualcanal.pt,167.172.99.206
       DJANGO_DEBUG: "false"
-      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       MATCH_CACHE_SECONDS: "300"
       API_ALLOW_ORIGIN: "https://qualcanal.pt,http://qualcanal.pt"
       DJANGO_CSRF_TRUSTED_ORIGINS: "https://qualcanal.pt,http://qualcanal.pt"
@@ -29,7 +30,6 @@ services:
       DJANGO_HSTS_SECONDS: "31536000"
       DJANGO_HSTS_INCLUDE_SUBDOMAINS: "true"
       DJANGO_HSTS_PRELOAD: "true"
-      DATABASE_URL: ${DATABASE_URL:-}
       DJANGO_LOG_LEVEL: INFO
     expose:
       - "8000"
