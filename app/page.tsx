@@ -1,13 +1,13 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect, useCallback } from "react"
 import { Search, Calendar, Trophy, Tv, Clock, ChevronDown } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import matchesData from "@/data/matches.json"
+// Frontend now relies solely on backend API; no local JSON fallback
 
 interface Match {
   date_text: string
@@ -15,31 +15,74 @@ interface Match {
   home: string
   away: string
   teams: string
-  competition: string
-  channels: string[]
+  competition: string | null
+  channels: string[] | null
   raw: string
 }
-
-const matches: Match[] = matchesData
 
 export default function QualCanal() {
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedDate, setSelectedDate] = useState("Todas as datas")
   const [selectedLeague, setSelectedLeague] = useState("Todas as ligas")
   const [selectedChannel, setSelectedChannel] = useState("Todos os canais")
+  const [matches, setMatches] = useState<Match[]>([])
+  const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadMatches = useCallback(async (signal?: AbortSignal) => {
+    setIsLoading(true)
+    setError(null)
+    try {
+      console.info("[QualCanal] fetch:start", { url: "/api/matches?refresh=1" })
+      const res = await fetch(`/api/matches?refresh=1`, { signal })
+      console.info("[QualCanal] fetch:response", { status: res.status, ok: res.ok, redirected: res.redirected, url: res.url })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      console.info("[QualCanal] fetch:json", { keys: Object.keys(data || {}), sample: Array.isArray(data?.matches) ? data.matches[0] : undefined })
+      const payload = Array.isArray(data?.matches) ? data.matches : (Array.isArray(data) ? data : null)
+      if (!payload) throw new Error("Invalid response payload")
+      const normalized: Match[] = (payload as Match[]).map((m) => ({
+        date_text: m.date_text || "",
+        time: m.time || "",
+        home: m.home || "",
+        away: m.away || "",
+        teams: m.teams || `${m.home || ""} - ${m.away || ""}`.trim(),
+        competition: m.competition ?? "",
+        channels: (m.channels || []).map((c) => (c || "").trim()).filter(Boolean),
+        raw: m.raw || "",
+      }))
+      console.info("[QualCanal] fetch:normalized", { count: normalized.length })
+      setMatches(normalized)
+    } catch (err) {
+      console.error("[QualCanal] fetch:error", err)
+      setError("Falha ao carregar dados do backend.")
+      setMatches([])
+    } finally {
+      console.info("[QualCanal] fetch:done")
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    loadMatches(controller.signal)
+    return () => controller.abort()
+  }, [loadMatches])
 
   // Get unique values for filters
   const uniqueDates = useMemo(() => {
     const dates = [...new Set(matches.map((match) => match.date_text))]
-    return ["Todas as datas", ...dates]
-  }, [])
+    const list = ["Todas as datas", ...dates]
+    console.debug("[QualCanal] memo:uniqueDates", { count: list.length - 1 })
+    return list
+  }, [matches])
 
   const uniqueLeagues = useMemo(() => {
     const leagues = [
       ...new Set(
         matches
           .map((match) => {
-            const competition = match.competition || ""
+            const competition = (match.competition || "").trim()
             if (competition.includes("Liga")) {
               return competition.split(" ").slice(-2).join(" ")
             }
@@ -48,32 +91,42 @@ export default function QualCanal() {
           .filter(Boolean),
       ),
     ]
-    return ["Todas as ligas", ...leagues]
-  }, [])
+    const list = ["Todas as ligas", ...leagues]
+    console.debug("[QualCanal] memo:uniqueLeagues", { count: list.length - 1 })
+    return list
+  }, [matches])
 
   const uniqueChannels = useMemo(() => {
-    const channels = [...new Set(matches.flatMap((match) => match.channels))]
-    return ["Todos os canais", ...channels]
-  }, [])
+    const channels = [...new Set(matches.flatMap((match) => match.channels || []))]
+    const list = ["Todos os canais", ...channels]
+    console.debug("[QualCanal] memo:uniqueChannels", { count: list.length - 1 })
+    return list
+  }, [matches])
 
   // Filter matches
   const filteredMatches = useMemo(() => {
-    return matches.filter((match) => {
+    const result = matches.filter((match) => {
       const matchesSearch =
         searchQuery === "" ||
-        match.home.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        match.away.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        match.competition.toLowerCase().includes(searchQuery.toLowerCase())
+        (match.home || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (match.away || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (match.competition || "").toLowerCase().includes(searchQuery.toLowerCase())
 
       const matchesDate = selectedDate === "Todas as datas" || match.date_text === selectedDate
 
-      const matchesLeague = selectedLeague === "Todas as ligas" || match.competition.includes(selectedLeague)
+      const matchesLeague = selectedLeague === "Todas as ligas" || (match.competition || "").includes(selectedLeague)
 
-      const matchesChannel = selectedChannel === "Todos os canais" || match.channels.includes(selectedChannel)
+      const matchesChannel = selectedChannel === "Todos os canais" || (match.channels || []).includes(selectedChannel)
 
       return matchesSearch && matchesDate && matchesLeague && matchesChannel
     })
-  }, [searchQuery, selectedDate, selectedLeague, selectedChannel])
+    console.debug("[QualCanal] memo:filteredMatches", { total: matches.length, filtered: result.length })
+    return result
+  }, [matches, searchQuery, selectedDate, selectedLeague, selectedChannel])
+
+  useEffect(() => {
+    console.info("[QualCanal] state:matches", { count: matches.length })
+  }, [matches])
 
   // Check if match is live (simplified logic - matches with "hoje" are considered live)
   const isLive = (match: Match) => match.raw.includes("hoje")
@@ -94,6 +147,33 @@ export default function QualCanal() {
       "C11 online": { bg: "bg-emerald-100", text: "text-emerald-800" },
     }
     return colors[channel] || { bg: "bg-gray-100", text: "text-gray-800" }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center gap-3 text-gray-700">
+          <div className="h-8 w-8 rounded-full border-2 border-gray-300 border-t-gray-900 animate-spin" />
+          <span className="text-sm">A carregar dados…</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-white">
+        <div className="flex flex-col items-center gap-4">
+          <p className="text-sm text-red-600">{error}</p>
+          <button
+            onClick={() => loadMatches()}
+            className="px-4 py-2 rounded bg-gray-900 text-white text-sm"
+          >
+            Tentar novamente
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -243,9 +323,8 @@ export default function QualCanal() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="text-sm">
-                        <div className="font-bold text-gray-900">{match.home}</div>
-                        <div className="font-bold text-gray-500 mt-1">vs {match.away}</div>
+                      <div className="text-sm font-bold text-gray-900">
+                        {match.home} <span className="text-gray-500">vs</span> {match.away}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -311,8 +390,9 @@ export default function QualCanal() {
               </div>
 
               <div className="mb-3">
-                <div className="font-bold text-gray-900">{match.home}</div>
-                <div className="font-bold text-gray-500 text-sm">vs {match.away}</div>
+                <div className="font-bold text-gray-900">
+                  {match.home} <span className="text-gray-500">vs</span> {match.away}
+                </div>
               </div>
 
               <div className="flex items-center gap-1 text-sm text-gray-900 mb-3">

@@ -18,18 +18,11 @@ RUN pip install --upgrade pip \
 
 COPY . .
 
+RUN chmod +x /app/entrypoint.sh
+
 RUN python manage.py collectstatic --noinput
 
 EXPOSE 8000
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD [
-    "gunicorn",
-    "qualcanal_backend.wsgi:application",
-    "--bind=0.0.0.0:8000",
-    "--workers=3",
-    "--access-logfile",
-    "-",
-    "--error-logfile",
-    "-",
-]
+CMD ["gunicorn", "qualcanal_backend.wsgi:application", "--bind=0.0.0.0:8000", "--workers=3", "--access-logfile", "-", "--error-logfile", "-"]

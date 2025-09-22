@@ -5,21 +5,35 @@ import csv
 import json
 import re
 from dataclasses import dataclass, asdict
+import logging
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Optional
 
 import requests
 from bs4 import BeautifulSoup, NavigableString, Tag, FeatureNotFound
+from django.utils import timezone
+from django.db import transaction
+
+from .models import Match as MatchModel
 
 URL = "https://ondebola.com/"
 HEADERS = {
     "User-Agent": "qualcanal-backend/1.0 (+https://example.com)",
 }
 CHANNEL_REGEX = re.compile(
-    r"(dazn\s*\d+|Canal\s*\d+|Sport[Tt]\.Tv\d|Sport\.Tv\d|Benfica\.Tv|C11|Sport\.Tv)",
+    r"(dazn\s*\d+|dazn|Canal\s*11|Canal\s*\d+|Sport\.?Tv\d?|Sport\.?TV\d?|Benfica\.?\s*Tv|Benfica\.?\s*TV|C11(?:\s*online)?|TVI)",
     flags=re.IGNORECASE,
 )
+
+# Markers that typically introduce competition names or phases
+COMPETITION_MARKER = re.compile(
+    r"(Liga|Taça|UEFA|Brasileirão|Conferência|Campeões|Qual\.?\s*Mundial|FUTSAL|Feminino|Jorn\.?\s*\d+|J\s*\d+|Euro\s*\d+|Liga\s*PT)",
+    flags=re.IGNORECASE,
+)
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -57,7 +71,15 @@ def text_of(element: Optional[Tag | NavigableString]) -> str:
 
 
 def parse_line_text(line: str) -> Optional[Match]:
-    """Parse a text line into a :class:`Match` instance if possible."""
+    """Parse a text line into a :class:`Match` instance if possible.
+
+    Heuristics:
+    - Split by '|' to isolate segments: [datetime, teams+competition, channels...]
+    - Extract time and date from the first segment
+    - Extract teams from the second segment, stopping the away name at the first
+      competition marker (e.g. 'Liga', 'UEFA', 'Brasileirão') if present
+    - Extract channels from the remaining segments using CHANNEL_REGEX
+    """
     cleaned = re.sub(r"\s+", " ", line).strip()
     if not cleaned:
         return None
@@ -72,45 +94,57 @@ def parse_line_text(line: str) -> Optional[Match]:
     if any(token in lowered for token in skip_tokens):
         return None
 
-    time_match = re.search(r"(\d{1,2}:\d{2})", cleaned)
+    # Split into pipe-separated segments for more reliable parsing
+    segments = [seg.strip(" -|") for seg in re.split(r"\s*\|\s*", cleaned) if seg.strip()]
+
+    # Date/time are commonly present in the first segment
+    dt_segment = segments[0] if segments else cleaned
+    time_match = re.search(r"(\d{1,2}:\d{2})", dt_segment)
     time_str = time_match.group(1) if time_match else None
-
-    teams_match = re.search(
-        r"([A-Za-z0-9ÁÀÂÃÉÈÍÓÔÕÚÇà-ö\s\.]+)\s*-\s*([A-Za-z0-9ÁÀÂÃÉÈÍÓÔÕÚÇà-ö\s\.]+)",
-        cleaned,
-    )
-    home = away = None
-    if teams_match:
-        home = teams_match.group(1).strip()
-        away = teams_match.group(2).strip()
-
-    date_match = re.search(r"(Seg|Ter|Qua|Qui|Sex|Sab|Dom)?\s*(\d{1,2}\s+[A-Za-z]{3,})", cleaned)
+    date_match = re.search(r"(Seg|Ter|Qua|Qui|Sex|Sab|Dom)?\s*(\d{1,2}\s+[A-Za-z]{3,})", dt_segment)
     date_text = date_match.group(0).strip() if date_match else None
 
-    competition = None
-    channels: list[str] = []
-    if teams_match:
-        trailing = cleaned[teams_match.end():].strip()
-        parts = [part.strip() for part in re.split(r"\s{2,}|\|", trailing) if part.strip()]
-        if parts:
-            competition = parts[0]
-            if len(parts) > 1:
-                channels = parts[1:]
-            else:
-                channel_tokens = CHANNEL_REGEX.findall(trailing)
-                channels = channel_tokens
-                if channel_tokens:
-                    competition = CHANNEL_REGEX.sub("", competition or trailing).strip(" -|") or None
+    # Teams usually live in the second segment when present
+    teams_segment = segments[1] if len(segments) > 1 else cleaned
+    home = away = None
+    if "-" in teams_segment:
+        left, right = [part.strip() for part in teams_segment.split("-", 1)]
+        home = left or None
+        comp_match = COMPETITION_MARKER.search(right)
+        if comp_match:
+            away = right[: comp_match.start()].strip() or None
+            comp_from_right = right[comp_match.start():].strip()
+        else:
+            away = right or None
+            comp_from_right = None
     else:
-        maybe_competition = re.search(
-            r"(Liga|Taça|UEFA|Brasileirão|Qual\. Mundial|FUTSAL|Feminino)",
+        # Fallback to broad pattern across entire line
+        teams_match = re.search(
+            r"([A-Za-z0-9ÁÀÂÃÉÈÍÓÔÕÚÇà-ö\s\.]+)\s*-\s*([A-Za-z0-9ÁÀÂÃÉÈÍÓÔÕÚÇà-ö\s\.]+)",
             cleaned,
-            flags=re.IGNORECASE,
         )
-        competition = maybe_competition.group(0) if maybe_competition else None
-        channels = CHANNEL_REGEX.findall(cleaned)
+        if teams_match:
+            home = teams_match.group(1).strip()
+            right = teams_match.group(2).strip()
+            comp_match = COMPETITION_MARKER.search(right)
+            away = (right[: comp_match.start()].strip() if comp_match else right) or None
+            comp_from_right = right[comp_match.start():].strip() if comp_match else None
+        else:
+            comp_from_right = None
 
-    channels = [channel.strip() for channel in channels if channel and channel.strip()]
+    # Channels can be present in later segments
+    tail_segments = " ".join(segments[2:]) if len(segments) > 2 else (segments[-1] if len(segments) > 0 else "")
+    channel_tokens = CHANNEL_REGEX.findall(" ".join([teams_segment, tail_segments]))
+    channels = [token.strip() for token in channel_tokens if token and token.strip()]
+
+    # Competition: prefer explicit part found after away within teams segment;
+    # otherwise scan remaining segments for a marker
+    competition = comp_from_right
+    if not competition and len(segments) > 1:
+        rest = " ".join(segments[1:])
+        comp_scan = COMPETITION_MARKER.search(rest)
+        if comp_scan:
+            competition = rest[comp_scan.start():].split(" | ")[0].strip()
 
     if not home and not away and not time_str:
         return None
@@ -137,10 +171,12 @@ def parse_dom(soup: BeautifulSoup) -> list[Match]:
 
     matches: list[Match] = []
     if not header:
+        LOGGER.debug("parse_dom: header not found; returning 0 matches")
         return matches
 
     table = header.find_next("table")
     if table:
+        parsed_rows = 0
         for row in table.find_all("tr"):
             columns = [text_of(cell) for cell in row.find_all(["td", "th"])]
             if len(columns) < 2:
@@ -148,6 +184,8 @@ def parse_dom(soup: BeautifulSoup) -> list[Match]:
             parsed = parse_line_text(" | ".join(columns))
             if parsed:
                 matches.append(parsed)
+            parsed_rows += 1
+        LOGGER.debug("parse_dom: table path parsed_rows=%d matches=%d", parsed_rows, len(matches))
         return matches
 
     collected_text = []
@@ -171,7 +209,7 @@ def parse_dom(soup: BeautifulSoup) -> list[Match]:
         parsed = parse_line_text(line)
         if parsed:
             matches.append(parsed)
-
+    LOGGER.debug("parse_dom: text path budget=%d bytes matches=%d", char_budget, len(matches))
     return matches
 
 
@@ -181,29 +219,69 @@ def fetch_matches(url: str = URL, headers: Optional[dict[str, str]] = None) -> l
     if headers:
         effective_headers.update(headers)
 
+    LOGGER.info("fetch_matches: fetching %s", url)
+    http_start = time.perf_counter()
     response = requests.get(url, headers=effective_headers, timeout=15)
+    http_ms = int((time.perf_counter() - http_start) * 1000)
+    LOGGER.info(
+        "fetch_matches: fetched url status=%d elapsed_ms=%d size_bytes=%d",
+        response.status_code,
+        http_ms,
+        len(response.text or ""),
+    )
     response.raise_for_status()
 
+    parser_used = "lxml"
     try:
         soup = BeautifulSoup(response.text, "lxml")
     except FeatureNotFound:
+        parser_used = "html.parser"
         soup = BeautifulSoup(response.text, "html.parser")
+    LOGGER.debug("fetch_matches: parser=%s", parser_used)
     matches = parse_dom(soup)
+    LOGGER.debug("fetch_matches: parse_dom returned %d matches", len(matches))
 
     if not matches:
+        LOGGER.warning("fetch_matches: parse_dom returned 0 matches; attempting visible text fallback")
         visible = " ".join(soup.stripped_strings)
         for line in (ln.strip() for ln in visible.splitlines() if ln.strip()):
             parsed = parse_line_text(line)
             if parsed:
                 matches.append(parsed)
+        LOGGER.debug("fetch_matches: visible text fallback produced %d matches", len(matches))
 
     unique: dict[str, Match] = {}
     for match in matches:
         key = match.raw[:200]
         if key not in unique:
             unique[key] = match
+    LOGGER.info("fetch_matches: returning %d unique matches (raw=%d)", len(unique), len(matches))
+    payload = [match.to_dict() for match in unique.values()]
 
-    return [match.to_dict() for match in unique.values()]
+    # Persist a snapshot to the database
+    try:
+        with transaction.atomic():
+            fetched_at = timezone.now()
+            for item in payload:
+                MatchModel.objects.create(
+                    source="ondebola",
+                    date_text=str(item.get("date_text") or "") or None,
+                    time=str(item.get("time") or "") or None,
+                    home=str(item.get("home") or "") or None,
+                    away=str(item.get("away") or "") or None,
+                    competition=(item.get("competition") or None),
+                    channels=list(item.get("channels") or []),
+                    raw=str(item.get("raw") or ""),
+                    fetched_at=fetched_at,
+                )
+        LOGGER.info("fetch_matches: persisted %d rows to DB", len(payload))
+    except Exception:
+        LOGGER.exception("fetch_matches: failed to persist rows to DB")
+
+    print(payload)
+    
+    
+    return payload
 
 
 def export_matches_to_files(matches: Iterable[dict[str, object]], directory: Path | None = None) -> None:
@@ -238,3 +316,9 @@ def export_matches_to_files(matches: Iterable[dict[str, object]], directory: Pat
             if isinstance(channels, list):
                 row["channels"] = ";".join(channels)
             writer.writerow(row)
+    LOGGER.info(
+        "export_matches_to_files: exported count=%d json=%s csv=%s",
+        len(match_list),
+        str(json_path),
+        str(csv_path),
+    )
