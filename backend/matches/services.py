@@ -229,7 +229,11 @@ def fetch_matches(url: str = URL, headers: Optional[dict[str, str]] = None) -> l
         http_ms,
         len(response.text or ""),
     )
-    response.raise_for_status()
+    try:
+        response.raise_for_status()
+    except Exception:
+        LOGGER.exception("fetch_matches: HTTP error status=%s body_prefix=%s", response.status_code, (response.text or "")[:200])
+        raise
 
     parser_used = "lxml"
     try:
@@ -278,9 +282,7 @@ def fetch_matches(url: str = URL, headers: Optional[dict[str, str]] = None) -> l
     except Exception:
         LOGGER.exception("fetch_matches: failed to persist rows to DB")
 
-    print(payload)
-    
-    
+    # Avoid noisy prints; rely on logger
     return payload
 
 

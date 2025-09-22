@@ -133,3 +133,30 @@ SECURE_HSTS_PRELOAD = os.environ.get("DJANGO_HSTS_PRELOAD", "").lower() in {"1",
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_BROWSER_XSS_FILTER = True
 X_FRAME_OPTIONS = "DENY"
+
+# --- Logging configuration ---
+# Emit structured logs to stdout so Docker/Gunicorn can capture them.
+LOG_LEVEL = os.environ.get("DJANGO_LOG_LEVEL", "INFO").upper()
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+    },
+    "root": {"handlers": ["console"], "level": LOG_LEVEL},
+    "loggers": {
+        "django": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "django.request": {"handlers": ["console"], "level": "ERROR", "propagate": False},
+        "matches": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "gunicorn.error": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+        "gunicorn.access": {"handlers": ["console"], "level": LOG_LEVEL, "propagate": False},
+    },
+}

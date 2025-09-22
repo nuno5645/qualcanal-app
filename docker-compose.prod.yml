@@ -30,6 +30,7 @@ services:
       DJANGO_HSTS_INCLUDE_SUBDOMAINS: "true"
       DJANGO_HSTS_PRELOAD: "true"
       DATABASE_URL: ${DATABASE_URL:-}
+      DJANGO_LOG_LEVEL: INFO
     expose:
       - "8000"
     volumes:

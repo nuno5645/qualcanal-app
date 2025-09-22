@@ -56,15 +56,15 @@ class MatchListView(View):
         )
 
         payload = None
-        if cache_timeout > 0 and not refresh_requested:
-            payload = cache.get(CACHE_KEY)
-            LOGGER.debug(
-                "MatchListView.get: cache %s",
-                "HIT" if payload is not None else "MISS",
-            )
+        try:
+            if cache_timeout > 0 and not refresh_requested:
+                payload = cache.get(CACHE_KEY)
+                LOGGER.debug(
+                    "MatchListView.get: cache %s",
+                    "HIT" if payload is not None else "MISS",
+                )
 
-        if payload is None:
-            try:
+            if payload is None:
                 LOGGER.info("MatchListView.get: fetching fresh matches via service")
                 matches = fetch_matches()
                 LOGGER.info("MatchListView.get: service returned count=%d", len(matches))
@@ -76,23 +76,30 @@ class MatchListView(View):
                 if cache_timeout > 0:
                     cache.set(CACHE_KEY, payload, timeout=cache_timeout)
                     LOGGER.debug("MatchListView.get: cached payload under key=%s ttl=%s", CACHE_KEY, cache_timeout)
-            except RequestException as exc:
-                LOGGER.exception("Failed to fetch ondebola matches: %s", exc)
-                payload = None
+        except RequestException as exc:
+            LOGGER.exception("Failed to fetch ondebola matches (requests): %s", exc)
+            payload = None
+        except Exception:
+            LOGGER.exception("MatchListView.get: unexpected error building payload")
+            payload = None
 
-        # If still no payload (e.g. network failure), read recent snapshot from DB
+        # If still no payload (e.g. network failure), try reading a recent snapshot from DB
         if payload is None:
-            latest = (
-                MatchModel.objects.filter(source="ondebola")
-                .order_by("-fetched_at")
-                .values("date_text", "time", "home", "away", "competition", "channels", "raw")[:500]
-            )
-            data = list(latest)
-            payload = {
-                "count": len(data),
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-                "matches": data,
-            }
+            try:
+                latest = (
+                    MatchModel.objects.filter(source="ondebola")
+                    .order_by("-fetched_at")
+                    .values("date_text", "time", "home", "away", "competition", "channels", "raw")[:500]
+                )
+                data = list(latest)
+                payload = {
+                    "count": len(data),
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "matches": data,
+                }
+            except Exception:
+                LOGGER.exception("MatchListView.get: DB fallback failed; returning empty dataset")
+                payload = {"count": 0, "fetched_at": datetime.now(timezone.utc).isoformat(), "matches": []}
 
         response = JsonResponse(payload, json_dumps_params={"ensure_ascii": False})
         LOGGER.info("MatchListView.get: responding count=%s", payload.get("count") if isinstance(payload, dict) else None)
